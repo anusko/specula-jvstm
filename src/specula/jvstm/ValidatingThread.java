@@ -3,14 +3,17 @@ package specula.jvstm;
 import java.util.LinkedList;
 import java.util.Queue;
 
-final class ValidatingThread extends Thread {
 
+public final class ValidatingThread extends Thread {
+	
 	private final Queue<TopLevelTransaction> _queue;
 	private final long _delay;
 
 
 	public ValidatingThread(final long delay) {
 		super();
+		
+		final ClassLoader cl = this.getClass().getClassLoader();
 
 		_queue = new LinkedList<TopLevelTransaction>();
 		_delay = delay;
@@ -19,7 +22,7 @@ final class ValidatingThread extends Thread {
 	}
 
 	@Override
-	public void run() {
+	public void run() {		
 		do {
 			while (_queue.isEmpty()) {
 				try {

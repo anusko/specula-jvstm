@@ -4,30 +4,26 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
-
-import org.apache.commons.javaflow.Continuation;
 
 import specula.core.SpeculaTransaction;
 import specula.core.TransactionStatus;
+import contlib.Continuation;
 
 
 public class ThreadContext extends specula.core.ThreadContext {
-	
+
 	private final List<SpeculaTransaction> _transactions;
 	private Continuation _lastContinuation;
 	// o volatile obriga à sincronização entre a thread de validação e a
 	// que está a olhar para o field
 	private volatile SpeculaTransaction _abortedTx;
-	//private final AtomicReference<SpeculaTransaction> _abortedTx;
 
 	private final Thread _startingThread;
 
 
 	public ThreadContext() {
 		_transactions = new LinkedList<SpeculaTransaction>();
-		//_abortedTx = new AtomicReference<SpeculaTransaction>();
-		
+
 		_startingThread = Thread.currentThread();
 	}
 
@@ -59,60 +55,60 @@ public class ThreadContext extends specula.core.ThreadContext {
 		synchronized (this) {
 			return ! (_abortedTx == null);
 		}
-		
-//		return ! _abortedTx.compareAndSet(null, null);
 	}
 
 	public void setAbortedTransaction(SpeculaTransaction tx) {
 		synchronized (this) {
 			if (_abortedTx == null) _abortedTx = tx;
 		}
-		
-//		_abortedTx.compareAndSet(null, tx);
 	}
-	
+
 	public boolean isTheAbortedTransaction(SpeculaTransaction tx) {
 		synchronized (this) {
 			return (_abortedTx == tx);
 		}
-		
-//		return _abortedTx.compareAndSet(tx, tx);
 	}
 
-	public Continuation reset() {
+	public void syncThreadContext() {
 		assert (_startingThread == Thread.currentThread());
-		
+
 		Iterator<SpeculaTransaction> it = getTransactions().iterator();
 		boolean abort = false;
-		
+
 		while (it.hasNext()) {
 			TopLevelTransaction tx = (TopLevelTransaction) it.next();
-			
+
 			if (abort) {
 				tx.abortTx();
-			} else if (tx.getStatus() == TransactionStatus.TO_ABORT) {
-				assert (isTheAbortedTransaction(tx));
-				tx.abortTx();
-				abort = true;
-			} else if (tx.getStatus() == TransactionStatus.COMPLETE) {
-				throw new Error("Dead code...");
+			} else {
+				synchronized (tx) {
+					while (tx.getStatus() == TransactionStatus.COMPLETE) {
+						try {
+							tx.wait();
+						} catch (InterruptedException e) {	}
+					}
+				}
+
+				if (tx.getStatus() == TransactionStatus.TO_ABORT) {
+					assert (isTheAbortedTransaction(tx));
+					tx.abortTx();
+					abort = true;
+				}
 			}
-			
-			it.remove();
 		}
-		
-		assert (_transactions.isEmpty());
-		
-		Continuation resumePoint = _abortedTx.getResumePoint();
-		synchronized (this) {
-			_abortedTx = null;	
+		getTransactions().clear();
+
+		if (abort) {
+			Continuation resumePoint = _abortedTx.getResumePoint();
+			synchronized (this) {
+				_abortedTx = null;	
+			}
+			_lastContinuation = null;
+
+			Continuation.resume(resumePoint);
+		} else {
+			_lastContinuation = null;
 		}
-//		resumePoint = _abortedTx.get().getResumePoint();
-//		_abortedTx.set(null);
-		// ----
-		_lastContinuation = null;
-		
-		return resumePoint;
 	}
 
 }

@@ -3,8 +3,6 @@ package specula.jvstm;
 import jvstm.CommitException;
 import jvstm.Transaction;
 
-import org.apache.commons.javaflow.Continuation;
-
 import specula.core.TransactionStatus;
 
 public class VBox<E> extends jvstm.VBox<E> {
@@ -41,7 +39,7 @@ public class VBox<E> extends jvstm.VBox<E> {
 			// e chamar um get/put/construtor especial.
 			// O construtor é um caso especial pq o commit nunca vai falhar, por isso talvez
 			// seja escusado ver se a tx falha, pq supostamente (?) isso nunca vai acontecer.
-			TopLevelTransaction.sync();
+			ThreadContext.sync();
 			do {
 				tx = (TopLevelTransaction) Transaction.begin();
 				tx.setAsGhostTransaction();
@@ -51,17 +49,16 @@ public class VBox<E> extends jvstm.VBox<E> {
 					Transaction.commit();
 				} catch (CommitException e) {
 					Transaction.abort();
-					Continuation.cancel();
 				}
 
 				synchronized (tx) {
-					while (tx._status == TransactionStatus.COMPLETE) {
+					while (tx.getStatus() == TransactionStatus.COMPLETE) {
 						try {
 							tx.wait();
 						} catch (InterruptedException e) { }
 					}
 				}
-				if (tx._status == TransactionStatus.COMMITTED) return value;
+				if (tx.getStatus() == TransactionStatus.COMMITTED) return value;
 			} while (true);
 
 		} else {
@@ -81,7 +78,7 @@ public class VBox<E> extends jvstm.VBox<E> {
 			// e chamar um get/put/construtor especial.
 			// O construtor é um caso especial pq o commit nunca vai falhar, por isso talvez
 			// seja escusado ver se a tx falha, pq supostamente (?) isso nunca vai acontecer.
-			TopLevelTransaction.sync();
+			ThreadContext.sync();
 			do {
 				tx = (TopLevelTransaction) Transaction.begin();
 				tx.setAsGhostTransaction();
@@ -91,17 +88,16 @@ public class VBox<E> extends jvstm.VBox<E> {
 					Transaction.commit();
 				} catch (CommitException e) {
 					Transaction.abort();
-					Continuation.cancel();
 				}
 
 				synchronized (tx) {
-					while (tx._status == TransactionStatus.COMPLETE) {
+					while (tx.getStatus() == TransactionStatus.COMPLETE) {
 						try {
 							tx.wait();
 						} catch (InterruptedException e) { }
 					}
 				}
-				if (tx._status == TransactionStatus.COMMITTED) return;
+				if (tx.getStatus() == TransactionStatus.COMMITTED) return;
 			} while (true);
 
 		} else {

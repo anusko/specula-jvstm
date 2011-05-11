@@ -1,6 +1,5 @@
 package specula.jvstm;
 
-import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -9,11 +8,9 @@ import jvstm.CommitException;
 import jvstm.PerTxBox;
 import jvstm.util.Cons;
 import jvstm.util.Pair;
-
-import org.apache.commons.javaflow.Continuation;
-
 import specula.core.SpeculaTransaction;
 import specula.core.TransactionStatus;
+import contlib.Continuation;
 
 public class TopLevelTransaction extends jvstm.TopLevelTransaction implements SpeculaTransaction {
 
@@ -39,7 +36,7 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 	Cons<jvstm.VBoxBody> _bodiesCommitted;
 	Map<PerTxBox, Object> _perTxValues;
 
-	private final Continuation _resumePoint;
+	private volatile Continuation _resumePoint;
 	private final ThreadContext _tc;
 	private boolean _ghostTransaction;
 
@@ -52,14 +49,25 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 		super(activeRecord);
 
 		_ws = Cons.empty();
-		_tc = (ThreadContext) Continuation.getContext();
-		_resumePoint = _tc.getLastContinuation();
+		_tc = (ThreadContext) ThreadContext.getCurrent();
 		_bodiesCommitted = Cons.empty();
 		_status = TransactionStatus.EXECUTING;
 		_ghostTransaction = false;
 
 		assert (_tc != null);
 	}
+	
+	@Override
+    public void start() {
+        super.start();
+        
+		if (_tc.hasTransactionAborted()) {
+			abortTx();
+			ThreadContext.sync();
+			throw new Error("Dead code...");
+			// execução vai ficar por aqui
+		}
+    }
 
 	/**
 	 * A ghost transaction doesn't show up in the thread context.
@@ -87,17 +95,21 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 
 	@Override
 	protected void tryCommit() {
-		// FIXME: daqui vem o problem do NullPointerException no bloco finally dos
-		// métodos @Atomic pq o Continuation.cancel() dentro do sync() leva ao retorno
-		// do método, o que faz com que o bloco finally seja executado.
-		// TODO: talvez o mais correcto seja lançar uma excepção nova, tipo
-		// SpeculativeCommitException e fazer o Continuation.cancel() aí.
 		if (_tc.hasTransactionAborted()) {
-			//			abortTx();
-			//			sync();
-			throw COMMIT_EXCEPTION;
+			abortTx();
+			ThreadContext.sync();
+			throw new Error("Dead code...");
 			// execução vai ficar por aqui
 		}
+		
+		ThreadContext.makeSnapshot();
+		synchronized (this) {
+			if (_status == TransactionStatus.ABORTED) {
+				current.set(this);
+				throw COMMIT_EXCEPTION;
+			}
+		}
+		_resumePoint = _tc.getLastContinuation();
 
 		_rs = this.bodiesRead;
 		_perTxValues = this.perTxValues;
@@ -164,7 +176,7 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 	}
 
 	@Override
-	protected boolean validateCommit() {
+	public boolean validateCommit() {
 		synchronized (this) {
 			// para ter a certeza que lemos o valor mais recente do _status
 			if (_tc.hasTransactionAborted() || _status == TransactionStatus.ABORTED) return false;	
@@ -210,11 +222,11 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 		case COMMITTED:
 			throw new Error("Trying to abort a committed transaction.");
 		case ABORTED:
-			throw new Error("Trying to abort an already aborted transaction.");
+			current.set(this.getParent());
 		}
 	}
 
-	protected void markForAbortion() {
+	public void markForAbortion() {
 		synchronized (this) {
 			if (_status == TransactionStatus.COMPLETE) {
 
@@ -236,7 +248,7 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 		cleanup();
 	}
 
-	protected void definitiveCommit() {
+	public void definitiveCommit() {
 		synchronized (this) {
 			assert (_status == TransactionStatus.COMPLETE);
 
@@ -284,31 +296,6 @@ public class TopLevelTransaction extends jvstm.TopLevelTransaction implements Sp
 		//		_ws = null;
 		//		_perTxValues = null;
 		//		_bodiesCommitted = null;
-	}
-
-	public static void sync() {
-		ThreadContext tc = (ThreadContext) Continuation.getContext();
-		Iterator<SpeculaTransaction> it = tc.getTransactions().iterator();
-
-		while (it.hasNext()) {
-			SpeculaTransaction tx = it.next();
-			synchronized (tx) {
-				while (tx.getStatus() == TransactionStatus.COMPLETE) {
-					try {
-						tx.wait();
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-					}
-				}
-			}
-
-			if (tx.getStatus() == TransactionStatus.TO_ABORT) {
-				assert (tc.isTheAbortedTransaction(tx));
-				Continuation.cancel();
-			}
-
-			it.remove();
-		}
 	}
 
 }
